@@ -1,0 +1,2 @@
+Sample	POS_A2058G	POS_A2059G	VariantPresent_A2058G	VariantPresent_A2059G	REF_A2058G	REF_A2059G	ALT_A2058G	ALT_A2059G	DP_A2058G	DP_A2059G	AltPerc_A2058G	AltPerc_A2059G
+/lustre/scratch118/infgen/team216/mb29/Treponema/method_testing/comp.mapping/test.comp-mapping/23s-comp-mapping_2020-03-02/22931_6#3//22931_6#3.bcf	6389	6390	NA	NA	A	A	G	.	1	1		
