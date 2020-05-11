@@ -1,0 +1,9 @@
+Sample	Patient.revised	Age	Date	Round	Village	A2059G	A2059G.perc	A2059G.mix	MLST	Genome	Genome2	Weeks.Duration
+R6-KOS-002	Patient_1	11	30/10/2015	6	Kosmayun	no	<1	Sensitive	JG8	no	Partial-Genome	2
+R7-KOS-003	Patient_1	11	13/06/2016	7	Kosmayun	yes	>99	Resistant	JG8	no	no-Genome	16
+R7-KOS-004	Patient_2	14	13/06/2016	7	Kosmayun	yes	>99	Resistant	JG8	no	no-Genome	5
+R8-KOS-004	Patient_3	9	01/11/2016	8	Kosmayun	yes	>99	Resistant	JG8	yes	Genome	3
+R8-KOS-007	Patient_4	9	01/11/2016	8	Kosmayun	partial	91	Hetero	JG8	yes	Genome	4
+R8-LMC-004	Patient_5	12	07/07/2016	8	Zuen	yes	>99	Resistant	JG8	yes	Genome	5
+R8-KOS-001	Patient_6	15	01/11/2016	8	Kosmayun	no	<1	Sensitive	-	no	no-Genome	24
+R8-KOS-005	Patient_7	9	01/11/2016	8	Kosmayun	no	<1	Sensitive	-	no	no-Genome	20

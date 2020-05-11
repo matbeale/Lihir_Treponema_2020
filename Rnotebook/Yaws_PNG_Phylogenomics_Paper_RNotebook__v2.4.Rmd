@@ -1,0 +1,1366 @@
+---
+title: "R Notebook: Phylogenomic and contextual analysis of Yaws genomes from Lihir, Papua New Guinea"
+output: html_notebook
+---
+
+
+# Import environment and library dependencies
+```{r}
+R.Version()
+
+library(ggplot2)
+library(ggtree)
+library(ggforce)
+library(treeio)
+library(plyr)
+library(dplyr)
+library(randomcoloR)
+library(Cairo)
+library(rPinecone)
+library(lubridate)
+library(seqinr)
+library(phangorn)
+library(pryr)
+library(gridExtra)
+library(readxl)
+library(pegas)
+library(phytools)
+
+print(sessionInfo())
+```
+
+
+# Specify data to use
+
+```{r}
+# Full Maximum Likelihood Tree
+tree.file <- "TPE_SamoaD_v1_bwa.74pc-genome-cov+.20190920.gubbins-WGS-aln.all.remasked.SNPs.aln.renamed.treefile"
+
+# SNP scaled global tree
+tree.SNPscale.file <- "TPE_SamoaD_v1_bwa.74pc-genome-cov+.20190920.gubbins-WGS-aln.all.remasked.SNPs.pyjar.joint.tre"
+
+
+# Macrolide resistance data (from ARIBA, although also done by RFLP for those in this study - checked for consistency where possible)
+macrolide.file <- "PNGL_Yaws_23s_ARIBA.summary.09-2019.renamed.csv"
+
+# Full metadata spreadsheet
+full.metadata.file <- "Supplementary Data_1__PNG-Lihir-Yaws_final_Paper_Metadata.xlsx"
+
+# Transmission network epi data file for generating network plot
+A2059G.net.file <- "PNG_Yaws_A2059G_Tx-network1__14102919.tsv"
+
+# parsed VCF file with JG8 SNPs
+TPP.vcf.file <- "TPE_SamoaD_v1_bwa.74pc-genome-cov+.20190920.gubbins-WGS-aln.all.remasked.JG8.vcf.tsv"
+
+
+# fasta file with JG8 SNPs
+JG8.fasta.file <- "TPE_SamoaD_v1_bwa.74pc-genome-cov+.20190920.gubbins-WGS-aln.all.remasked.JG8.SNPs.aln"
+
+
+# Survey sample numbers and workflow
+#sample.consort.raw.file <- "/Users/mb29/Papers/Yaws_Lihir_Genomic-Epi-23s_Paper_2019/Revision_03-2020/useful bits/rework_sample_consort+workflows/Revised_+_cleaned__Complete PNG PCRsummaries for typing R1-R8__27-03-2020.xlsx"
+sample.consort.raw.file <- "redacted___Revised_+_cleaned__Complete PNG PCRsummaries for typing R1-R8__23-04-2020.xlsx"
+
+
+# Sequencing performance metrics
+seq.performance.file <- "Seq.performance.09-2019.tsv"
+
+
+# Phylobayes with rooted guide tree
+# consensus tree
+phylobayes.contree.file <- "TPE_SamoaD_v1_bwa.74pc-genome-cov+.20190920.gubbins-WGS-aln.all.renamed.SNPs.root.phylobayes.1_sample.con.tre"
+# Run file 1
+phylobayes.run1.file <- "TPE_SamoaD_v1_bwa.74pc-genome-cov+.20190920.gubbins-WGS-aln.all.renamed.SNPs.root.phylobayes.1.treelist"
+# Run file 2
+phylobayes.run2.file <- "TPE_SamoaD_v1_bwa.74pc-genome-cov+.20190920.gubbins-WGS-aln.all.renamed.SNPs.root.phylobayes.2.treelist"
+# subsample of all trees
+phylobayes.sample.file <- "TPE_SamoaD_v1_bwa.74pc-genome-cov+.20190920.gubbins-WGS-aln.all.renamed.SNPs.root.phylobayes_sample.treelist"
+
+
+# Deep Sequencing data (Supplementary Data 2)
+deep.seq.alleles.file <- "Supplementary_Data_2__Deep-sequencing-23S-PileupResults_revised.xls"
+
+# deep sequencing haplotype counts
+bam2hap.all.file <- "operon1.+totals+q30bam2haplotype.tsv"
+
+
+# Multiple sequence alignment for subsampling dataset to look at sites specific to R6-KOS-002 (Patient 1 pre-treatment sample) in context
+index.failure.full.aln.file <- "TPE_74pc-genome-cov+_index-sample54pc.mfas.2020-04-22.renamed.vcf"
+index.failure.full.sitelist.file <- "TPE_74pc-genome-cov+_index-sample54pc.mfas.2020-04-22.renamed.sitelist"
+
+# Tree generated from subsetted multiple sequencealignment for R6-KOS-002
+index.failure.tree.file <- "TPE_74pc-genome-cov+_index-sample54pc.index-seq-variable-sites.fas.treefile"
+
+```
+
+
+# Redo all sample workflow plots and analyses
+```{r}
+# Look at sample workflow plotting using raw data
+sample.consort.raw <- read_excel(sample.consort.raw.file)
+
+###
+
+# How many passed initial MLST
+sample.consort.raw.summary <- data.frame(sample.consort.raw %>% 
+                                           dplyr::group_by(Timepoint, Complete_MLST) %>%
+                                           dplyr::summarize(Complete.MLST=n()))
+colnames(sample.consort.raw.summary) <- c("Timepoint", "value","Complete MLST")
+
+# How many were selected to represent the dataset
+sample.consort.temp <- data.frame(sample.consort.raw %>% dplyr::group_by(Timepoint, Selected_to_represent_dataset) %>%
+                                             dplyr::summarize(total=n()))
+colnames(sample.consort.temp) <- c("Timepoint", "value","Selected Representatives")
+sample.consort.raw.summary <- plyr::join(sample.consort.raw.summary,sample.consort.temp)
+
+# How many passed qPCR filters at U Washington
+sample.consort.temp <- data.frame(sample.consort.raw %>% dplyr::group_by(Timepoint, `qPCR_Ct<32_@UW`) %>%
+                                    dplyr::summarize(total=n()))
+colnames(sample.consort.temp) <- c("Timepoint", "value","qPCR UW")
+sample.consort.raw.summary <- plyr::join(sample.consort.raw.summary,sample.consort.temp)
+
+# How many were initially sent to WSI for sequencing
+sample.consort.temp <- data.frame(sample.consort.raw %>% dplyr::group_by(Timepoint, sent_to_WSI) %>%
+                                    dplyr::summarize(total=n()))
+colnames(sample.consort.temp) <- c("Timepoint", "value","Sent to WSI")
+sample.consort.raw.summary <- plyr::join(sample.consort.raw.summary,sample.consort.temp)
+
+# How many passed qPCR filters at WSI
+sample.consort.temp <- data.frame(sample.consort.raw %>% dplyr::group_by(Timepoint, `WSI_qPCR_Ct<32`) %>%
+                                    dplyr::summarize(total=n()))
+colnames(sample.consort.temp) <- c("Timepoint", "value","qPCR WSI")
+sample.consort.raw.summary <- plyr::join(sample.consort.raw.summary,sample.consort.temp)
+
+# How many were submitted for sequencing
+sample.consort.temp <- data.frame(sample.consort.raw %>% dplyr::group_by(Timepoint, Sequenced) %>%
+                                    dplyr::summarize(total=n()))
+colnames(sample.consort.temp) <- c("Timepoint", "value","WGS Submitted")
+sample.consort.raw.summary <- plyr::join(sample.consort.raw.summary,sample.consort.temp)
+
+# How many were successfully sequenced
+sample.consort.temp <- data.frame(sample.consort.raw %>% dplyr::group_by(Timepoint, Genome_Used_in_Tree) %>%
+                                    dplyr::summarize(total=n()))
+colnames(sample.consort.temp) <- c("Timepoint", "value","WGS Successful")
+sample.consort.raw.summary <- plyr::join(sample.consort.raw.summary,sample.consort.temp)
+
+# How many were submitted for Deep Sequencing
+sample.consort.temp <- data.frame(sample.consort.raw %>% dplyr::group_by(Timepoint, Deep_Sequencing_Selected) %>%
+                                    dplyr::summarize(total=n()))
+colnames(sample.consort.temp) <- c("Timepoint", "value","Deep Sequencing Selected")
+sample.consort.raw.summary <- plyr::join(sample.consort.raw.summary,sample.consort.temp)
+
+# How many were successfully for Deep Sequenced
+sample.consort.temp <- data.frame(sample.consort.raw %>% dplyr::group_by(Timepoint, Deep_Sequencing_Successful) %>%
+                                    dplyr::summarize(total=n()))
+colnames(sample.consort.temp) <- c("Timepoint", "value","Deep Sequencing Successful")
+sample.consort.raw.summary <- plyr::join(sample.consort.raw.summary,sample.consort.temp)
+
+# How many had resistance alleles
+sample.consort.temp <- data.frame(sample.consort.raw %>% dplyr::group_by(Timepoint, Resistance_Allele) %>%
+                                    dplyr::summarize(total=n()))
+colnames(sample.consort.temp) <- c("Timepoint", "value","Resistance Allele")
+sample.consort.raw.summary <- plyr::join(sample.consort.raw.summary,sample.consort.temp)
+
+
+# Only keep 'yes' values
+sample.consort.raw.summary.yes <- sample.consort.raw.summary[sample.consort.raw.summary$value=="yes",]
+# replace NA with 0 counts
+sample.consort.raw.summary.yes[is.na(sample.consort.raw.summary.yes)] <- 0
+
+
+# Include totals
+sample.consort.temp <- data.frame(sample.consort.raw %>% dplyr::group_by(Timepoint) %>% dplyr::summarize(total=n()))
+colnames(sample.consort.temp) <- c("Timepoint", "TPE positive")
+sample.consort.raw.summary.yes <- plyr::join(sample.consort.raw.summary.yes,sample.consort.temp)
+
+sample.consort.raw.summary.yes
+```
+
+```{r}
+# Make a first plot for the WGS workflow
+#WGS.variables.plotting <- c("Timepoint", "TPE positive", "Complete MLST", "Selected Representatives", "qPCR UW", "Sent to WSI", "qPCR WSI", "WGS Submitted", "WGS Successful")
+WGS.variables.plotting <- c("Timepoint", "TPE positive", "Complete MLST", "Selected Representatives", "qPCR WSI", "WGS Submitted", "WGS Successful")
+
+Sample.workflow.WGS <- sample.consort.raw.summary.yes[,WGS.variables.plotting]
+Sample.workflow.WGS.melt <- reshape2::melt(Sample.workflow.WGS, id.vars="Timepoint")
+
+
+# Get totals
+nrow(sample.consort.raw)
+sum(Sample.workflow.WGS$`TPE positive`)
+sum(Sample.workflow.WGS$`Complete MLST`)
+sum(Sample.workflow.WGS$`Selected Representatives`)
+sum(Sample.workflow.WGS$`qPCR UW`)
+
+sum(Sample.workflow.WGS$`Sent to WSI`)
+sum(Sample.workflow.WGS$`qPCR WSI`)
+sum(Sample.workflow.WGS$`WGS Submitted`)
+sum(Sample.workflow.WGS$`WGS Successful`)
+
+data.frame(sample.consort.raw[sample.consort.raw$Resistance_Allele=="yes",])
+```
+
+```{r}
+# Make plots
+
+# Make a first plot for the WGS workflow
+#WGS.variables.plotting <- c("Timepoint", "TPE positive", "Complete MLST", "Selected Representatives", "qPCR UW", "Sent to WSI", "qPCR WSI", "WGS Submitted", "WGS Successful")
+WGS.variables.plotting <- c("Timepoint", "TPE positive", "Complete MLST", "Selected Representatives", "qPCR WSI", "WGS Submitted", "WGS Successful")
+
+Sample.workflow.WGS <- sample.consort.raw.summary.yes[,WGS.variables.plotting]
+Sample.workflow.WGS.melt <- reshape2::melt(Sample.workflow.WGS, id.vars="Timepoint")
+
+Sample.workflow.WGS.cols <- data.frame(variable=WGS.variables.plotting[c(2:length(WGS.variables.plotting))],stringsAsFactors = F)
+#Sample.workflow.WGS.cols$cols <-c("dodgerblue3","skyblue1","darkorange3","orange1","darkorchid3","orchid","forestgreen","seagreen2")
+Sample.workflow.WGS.cols$cols <-c("dodgerblue3","skyblue1","darkorange3","orchid","forestgreen","seagreen2")
+
+
+p.survey.stats.WGS <- ggplot(Sample.workflow.WGS.melt, aes(factor(Timepoint),value,fill=variable)) +
+  geom_bar(stat="identity",position="dodge",width=0.8, color="black") + 
+  theme_bw() +
+  theme(legend.position = "top") + 
+  labs(x="Survey Timepoint (months)", y="Sample Count", fill="Key") +
+  scale_fill_manual(breaks= Sample.workflow.WGS.cols$variable, values=Sample.workflow.WGS.cols$cols) + 
+  NULL
+#p.survey.stats.WGS
+
+
+# Make a second plot for the deep sequencing  workflow
+Deepseq.variables.plotting <- c("Timepoint", "TPE positive", "Deep Sequencing Selected", "Deep Sequencing Successful")
+Sample.workflow.deepseq <- sample.consort.raw.summary.yes[,Deepseq.variables.plotting]
+Sample.workflow.deepseq.melt <- reshape2::melt(Sample.workflow.deepseq, id.vars="Timepoint")
+
+Sample.workflow.deepseq.cols <- data.frame(variable=Deepseq.variables.plotting[c(2:length(Deepseq.variables.plotting))],stringsAsFactors = F)
+Sample.workflow.deepseq.cols$cols <- c("dodgerblue3","tomato3","salmon")
+
+p.survey.stats.deepseq <- ggplot(Sample.workflow.deepseq.melt, aes(factor(Timepoint),value,fill=variable)) +
+  geom_bar(stat="identity",position="dodge",width=0.3, color="black") + 
+  theme_bw() +
+  theme(legend.position = "top") + 
+  labs(x="Survey Timepoint (months)", y="Sample Count", fill="Key") +
+  scale_fill_manual(breaks= Sample.workflow.deepseq.cols$variable, values=Sample.workflow.deepseq.cols$cols) + 
+  NULL
+#p.survey.stats.deepseq 
+```
+
+# Now plot together
+```{r,fig.width=6.5, fig.height=7}
+# want to put them together, so remove x axis from top plot
+x.theme.strip <- theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x= element_blank())
+
+# plot together
+gridExtra::grid.arrange(p.survey.stats.WGS + x.theme.strip,p.survey.stats.deepseq + theme(legend.position="bottom"), ncol=1)
+
+
+
+```
+
+Now look at distribiution of MLST types
+```{r}
+# Look at distribution of types
+sample.MLST.summary <- data.frame(sample.consort.raw %>% 
+                                           dplyr::group_by(MLST,) %>%
+                                           dplyr::summarize(Total=n()))
+# Selected for representatives
+sample.MLST.summary <- plyr::join(sample.MLST.summary,data.frame(sample.consort.raw[sample.consort.raw$Selected_to_represent_dataset=="yes",] %>% 
+                                                                  dplyr::group_by(MLST,) %>%
+                                                                  dplyr::summarize(`Selected Representatives`=n())), by="MLST")
+# passed UW qPCR
+sample.MLST.summary <- plyr::join(sample.MLST.summary,data.frame(sample.consort.raw[(sample.consort.raw$`qPCR_Ct<32_@UW`=="yes"),] %>% 
+                                                                   dplyr::group_by(MLST) %>% 
+                                                                   dplyr::summarize(`qPCR UW`=n())), by="MLST")
+# Sent to WSI
+sample.MLST.summary <- plyr::join(sample.MLST.summary,data.frame(sample.consort.raw[(sample.consort.raw$sent_to_WSI=="yes"),] %>% 
+                                                                   dplyr::group_by(MLST) %>% 
+                                                                   dplyr::summarize(`Sent to WSI`=n())), by="MLST")
+# passed WSI qPCR
+sample.MLST.summary <- plyr::join(sample.MLST.summary,data.frame(sample.consort.raw[(sample.consort.raw$`WSI_qPCR_Ct<32`=="yes"),] %>% 
+                                                                   dplyr::group_by(MLST) %>% 
+                                                                   dplyr::summarize(WSI_qPCR=n())), by="MLST")
+# Submitted to sequencing
+sample.MLST.summary <- plyr::join(sample.MLST.summary,data.frame(sample.consort.raw[(sample.consort.raw$Sequenced=="yes"),] %>% 
+                                                                   dplyr::group_by(MLST) %>% 
+                                                                   dplyr::summarize(WGSsubmitted=n())), by="MLST")
+# Sequencing Successful
+sample.MLST.summary <- plyr::join(sample.MLST.summary,data.frame(sample.consort.raw[(sample.consort.raw$Genome_Used_in_Tree=="yes"),] %>% 
+                                                                   dplyr::group_by(MLST) %>% 
+                                                                   dplyr::summarize(WGSsuccessful=n())), by="MLST")
+
+# Submitted for deep sequencing
+sample.MLST.summary <- plyr::join(sample.MLST.summary,data.frame(sample.consort.raw[(sample.consort.raw$Deep_Sequencing_Selected=="yes"),] %>% 
+                                                                   dplyr::group_by(MLST) %>% 
+                                                                   dplyr::summarize(DeepSeqSelected=n())), by="MLST")
+# Deep Sequencing Successful
+sample.MLST.summary <- plyr::join(sample.MLST.summary,data.frame(sample.consort.raw[(sample.consort.raw$Deep_Sequencing_Successful=="yes"),] %>% 
+                                                                   dplyr::group_by(MLST) %>% 
+                                                                   dplyr::summarize(DeepSeqSuccessful=n())), by="MLST")
+
+
+colnames(sample.MLST.summary) <- c("MLST", "TPE positive", "Selected Representatives", "qPCR UW", "Sent to WSI", "qPCR WSI", "WGS Submitted", "WGS Successful", "Deep Sequencing Selected", "Deep Sequencing Successful")
+
+# Subset to include columns needed for plot
+sample.MLST.summary <- sample.MLST.summary[,c("MLST", "TPE positive", "Selected Representatives", "qPCR WSI", "WGS Submitted", "WGS Successful", "Deep Sequencing Selected", "Deep Sequencing Successful")]
+
+# replace NA with 0 counts
+sample.MLST.summary[is.na(sample.MLST.summary)] <- 0
+sample.MLST.summary[(sample.MLST.summary=="-")] <- "Untyped"
+sample.MLST.summary.melt <- reshape2::melt(sample.MLST.summary, id.vars="MLST")
+
+
+p.MLST.stage.proportions <- ggplot(sample.MLST.summary.melt , aes(variable,value,fill=factor(MLST))) +
+  #geom_bar(stat="identity",position="stack",width=0.5, aes(color=NULL)) + 
+  geom_bar(stat="identity",position="dodge",width=.9, color="black") + 
+  #geom_bar(stat="identity",position="fill",width=0.5, aes(color=NULL)) +
+  theme_bw() +
+  theme(legend.position = "top", axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  labs(x="Sample Stage", y="Sample Count", fill="Key") +
+  facet_zoom(ylim = c(0, 50),show.area=T) +
+  theme(legend.position="bottom")
+
+#p.MLST.stage.proportions
+```  
+
+Now plot all together
+```{r,fig.width=8, fig.height=12}
+# plot together
+gridExtra::grid.arrange(p.survey.stats.WGS + x.theme.strip, p.survey.stats.deepseq, p.MLST.stage.proportions + theme(legend.position = "bottom"), ncol=1, heights=c(1,1,2))
+
+
+
+```
+
+
+
+
+
+# Do some analysis of qPCR vs sequencing performance
+```{r}
+
+#############
+# Sample sequencing performance
+seq.performance <- read.csv(seq.performance.file,sep="\t", comment.char = "",stringsAsFactors = F, header=T)
+
+p.seq.performance <- ggplot(seq.performance[seq.performance$cov.5!="-",],aes(as.numeric(WSI_qPCR.Ct),as.numeric(cov.5),color=as.numeric(meancov.all),shape=Type)) + 
+  geom_point(size=2,alpha=0.95) + 
+  theme_bw() +
+  labs(x="qPCR CT (TPANIC_0574)", y="Breadth of coverage (% sites >5x)", color="Mean genome \ncoverage (x)",shape="MLST") +
+  NULL 
+
+p.seq.performance
+
+```
+
+
+
+# Import trees and do some basic processing
+
+```{r}
+# Read in ML tree
+mytree.phylo <- phytools::midpoint.root(read.tree(tree.file))
+mytree.phylo <- ape::drop.tip(mytree.phylo,"Treponema_pallidum_subsp_pertenue_str_SamoaD_v1.tpr_arp_0470_23Sa-masked",trim.internal=T)
+
+# Read in SNP-scaled Tree
+mytree.SNPscale.phylo <- phytools::midpoint.root(read.tree(tree.SNPscale.file))
+#mytree.SNPscale.phylo <- ape::drop.tip(mytree.SNPscale.phylo,"Treponema_pallidum_subsp_pertenue_str_SamoaD_v1.tpr+arp+0470+23Sa-masked",trim.internal=T)
+
+
+# Define shortened names to recode all samples (allows clean up of some sample IDs for consistency and ease of reading plots)
+fix.tipnames <- data.frame(old.name=c("BosniaA", "Fribourg-Blanc", "Gambia-1", "Gambia-2", "NKNP-1", "CDC2", "Gauthier", "Ghana-051", "CDC_2575", "PNGL_R7-Kun2-001B", "PNGL_R7-Kun2-001", "PNGL_R8-LMC-012", "TaïNP-2", "Kampung_Dalan_K363", "Sei_Geringging_K403", "SamoaD", "PNGL_R3-Sal007", "TPP_CP0495", "TPP_CP0465", "TPP_CP0461", "TPP_CP0492", "PNGL_R2-SR001B", "PNGL_R3-Zu003", "PNGL_R7-Lan-005", "PNGL_R2-64919", "PNGL_R4-ZU-021", "PNGL_R6-HUR-007", "PNGL_C5-ZUE007", "PNGL_R6-LES004", "PNGL_R6-SAM1-001", "PNGL_C5-SAM001",
+                                       "PNGL_R2-106190", "PNGL_R8-LMC-004", "PNGL_R8-MAZ-003", "PNGL_R7-Put1-002", "PNGL_R8-KOS-004", "PNGL_R8-KOS-007", "TPP_WP0022.5", "TPP_WP0022.7.liq", "TPP_WP0022.7.scab","PNGL_R6-KO5002","PNGL_R7-Kos-003","PNGL_R7-Kos-004"),
+                           new.name=c("BosniaA", "Fribourg-Blanc", "Gambia-1", "Gambia-2", "NKNP-1", "CDC2", "Gauthier", "Ghana-051", "CDC_2575", "R7-KUN2-001B", "R7-KUN2-001", "R8-LMC-012", "TaïNP-2", "Kampung_Dalan_K363", "Sei_Geringging_K403", "SamoaD", "R3-SAL-007", "CP0495", "CP0465", "CP0461", "CP0492", "R2-SR-001B", "R3-ZU-003", "R7-LAN-005", "R2-64919", "R4-ZUE-021", "R6-HUR-007", "R5-ZUE-007", "R6-LES-004", "R6-SAM1-001", "R5-SAM-001", "R2-106190", "R8-LMC-004", "R8-MAZ-003", "R7-PUT1-002", "R8-KOS-004", 
+                                      "R8-KOS-007", "WP0022.5", "WP0022.7.liq", "WP0022.7.scab","R6-KOS-002","R7-KOS-003","R7-KOS-004"),
+                           stringsAsFactors = F)
+
+
+# Fix ML tree tipnames
+mltree.tipnames <- data.frame(old.name=mytree.phylo$tip.label,stringsAsFactors = F)
+mltree.tipnames <- plyr::join(mltree.tipnames,fix.tipnames, by="old.name")
+mytree.phylo$tip.label <- mltree.tipnames$new.name
+
+# Fix SNP scale tree tipnames
+snpscale.tipnames <- data.frame(old.name=mytree.SNPscale.phylo$tip.label,stringsAsFactors = F)
+snpscale.tipnames <- plyr::join(snpscale.tipnames,fix.tipnames, by="old.name")
+mytree.SNPscale.phylo$tip.label <- snpscale.tipnames$new.name
+
+# Bring in metadata and fix names
+#mymeta <- read.csv(meta.file,sep="\t", stringsAsFactors = F, comment.char = "", header=T)
+
+myfull.meta <-  readxl::read_excel(full.metadata.file)
+mymeta <- myfull.meta
+
+#colnames(mymeta) <- c("Sample","SampleShort","Year","Geo_location","seqdr","seqdrh")
+mymeta$old.name <-  mymeta$Sample
+mymeta <- plyr::join(mymeta,fix.tipnames, by="old.name")
+mymeta <- mymeta[!is.na(mymeta$new.name),]
+mymeta$Sample <- mymeta$new.name
+
+
+```
+
+
+# Basic ML tree
+
+```{r,fig.width = 4, fig.height = 4}
+# Do some processing on ML tree (e.g. nodes for bootstrapping)
+mytree.phylo.data <- data.frame(ggtree(mytree.phylo)$data,stringsAsFactors=F)
+mytree.phylo.data.nodes <- mytree.phylo.data[!mytree.phylo.data$isTip,]
+mytree.phylo.data.nodes$label <- as.numeric(mytree.phylo.data.nodes$label)
+mytree.phylo.data.nodes <- mytree.phylo.data.nodes[mytree.phylo.data.nodes$label >= 95,]
+
+# now build tree
+mytree.ggtree <- ggtree(mytree.phylo, ladderize = T) + 
+  geom_text(data=mytree.phylo.data.nodes, aes(label=label), size=2, hjust=1.25, vjust=-0.4)
+
+mytree.ggtree 
+```
+
+
+# Basic SNP scaled tree
+
+```{r,fig.width = 4, fig.height = 4}
+### Do some processing for SNP scaled tree
+mymeta.country <- data.frame(Country=mymeta$Country, stringsAsFactors = T, row.names = mymeta$Sample)
+distinctColorPalette(k=length(unique(mymeta.country$Country)))
+
+# create a variable containing edge lengths and positions for plotting
+edge <- data.frame(mytree.SNPscale.phylo$edge, edge_num=1:length(mytree.SNPscale.phylo$edge.length))
+colnames(edge)=c("parent", "node", "edge_num")
+edge$SNPs <- mytree.SNPscale.phylo$edge.length
+edge <- data.frame(mytree.SNPscale.phylo$edge, edge_num=1:length(mytree.SNPscale.phylo$edge.length))
+colnames(edge)=c("parent", "node", "edge_num")
+edge$SNPs <- mytree.SNPscale.phylo$edge.length
+
+# now build tree
+mytree.SNPscale.ggtree <- ggtree(mytree.SNPscale.phylo, ladderize = T) %<+% 
+  edge + geom_text(aes(x=branch, label=SNPs, vjust=-.5),size=3,color="grey50") 
+
+mytree.SNPscale.ggtree
+```
+
+
+# Process and combine various metadata
+```{r}
+
+colnames(mymeta)[colnames(mymeta)=="Godornes_MLST"] <- "MLST"
+colnames(mymeta)[colnames(mymeta)=="WGS_23S_A2059G"] <- "A2059G"
+
+meta.plotting1.p <- mymeta[,c("Country","MLST","A2059G")]
+row.names(meta.plotting1.p) <- mymeta$Sample
+meta.plotting1.p[meta.plotting1.p$MLST=="-","MLST"] <- NA
+
+meta.plotting1.p$Country <- gsub("^","1_",meta.plotting1.p$Country, perl=T)
+meta.plotting1.p$MLST <- gsub("^","2_",meta.plotting1.p$MLST, perl=T)
+meta.plotting1.p$A2059G <- gsub("^","3_",meta.plotting1.p$A2059G, perl=T)
+meta.plotting1.p$A2059G <- gsub("no","No",gsub("yes","Yes",meta.plotting1.p$A2059G))
+
+
+```
+
+
+# Define plot colours
+```{r}
+# Define country colours
+country.col <- c("#DA7B6E", "#D7AACB", "#D7DDD7", "#8286D1", "#D964C0", "#AC46E1", "#CEC990", "#DDD44F", "#7DDFB0", "#94E25C", "#83C9DB")
+
+# Define MLST colours
+#mlst.col <- c("#92D6D8", "#8E94D7", "#D9C2D1", "#AE48DF", "#DB6BC0", "#7FDFA3", "#D87C73", "#D4CB94", "#BFDE51")
+mlst.col <- c("#92D6D8", "#8E94D7", "#D9C2D1", "#AE48DF",              "#7FDFA3", "#D87C73", "#D4CB94", "#BFDE51")
+
+# Define A2059G colours
+macrolide.col <- c("grey20","red")
+
+tree.metacols <- data.frame(tag=(unique(as.character(unlist(meta.plotting1.p[,c("Country","MLST","A2059G")])))),stringsAsFactors=F)
+tree.metacols <- data.frame(tag=sort(tree.metacols[!is.na(tree.metacols$tag),]),stringsAsFactors=F)
+
+tree.metacols$col <- c(country.col,mlst.col,macrolide.col)
+
+
+```
+
+
+# Plot ML Tree with metadata
+```{r,fig.width = 9, fig.height = 8}
+
+#mytree.ggtree.combi <- mytree.ggtree %>%   
+#  gheatmap(meta.plotting1.p, colnames_position="top",font.size=3,width=0.5,offset=0.0025) + 
+#  geom_tiplab(size=2.5,align=T) + geom_treescale(fontsize=3,y=15,x=0.0005)  +
+#  scale_fill_manual(breaks=tree.metacols$tag,values=tree.metacols$col,labels=gsub("\\_","\\ ",gsub("^[1-3]+\\_","",tree.metacols$tag, perl=T)))
+
+mytree.ggtree.combi <- mytree.ggtree %>%   
+  gheatmap(meta.plotting1.p, colnames_position="top",font.size=3,width=0.5,offset=0.000125) + 
+  geom_tiplab(size=2.5,align=T) + geom_treescale(fontsize=3,y=15,x=0.00075)  +
+  scale_fill_manual(breaks=tree.metacols$tag,values=tree.metacols$col,labels=gsub("\\_","\\ ",gsub("^[1-3]+\\_","",tree.metacols$tag, perl=T)))
+
+```
+
+```{r}
+mytree.ggtree.combi
+
+
+```
+
+
+# Process JG8 tree and phylo
+
+```{r,fig.width = 4, fig.height = 4}
+
+# Generate all possible subtrees
+mytree.SNPscale.subtrees <- ape::subtrees(mytree.SNPscale.phylo)
+
+# Extract specific JG8 subtree
+#current.subtree.id <- 16
+current.subtree.id <- 17
+current.subtree <- mytree.SNPscale.subtrees[[current.subtree.id]]
+
+# specify edge lengths (SNPs) for subtree
+subtree.edge <- data.frame(current.subtree$edge, edge_num=1:length(current.subtree$edge.length))
+colnames(subtree.edge) <- c("parent","node","edge_num")
+subtree.edge$SNPs <- current.subtree$edge.length
+
+# merge metadata with tree data
+mytree.SNPscale.ggtree2 <- ggtree(mytree.SNPscale.phylo)
+mytree.SNPscale.data2 <- mytree.SNPscale.ggtree2$data
+#subtree.meta <- mymeta[(mymeta$MLST=="JG8" & mymeta$Genome_Used_in_Tree=="yes"),c("Sample","Village","A2059G","MDA_Round")]
+
+subtree.meta <- mymeta[(mymeta$MLST=="JG8" & mymeta$Genome_Used_in_Tree=="yes"),c("Sample","Village","A2059G","MDA_Round","Travel_History")]
+
+mytree.SNPscale.data.meta <- merge(mytree.SNPscale.data2, subtree.meta, by.x="label",by.y="Sample")
+
+# Define resistant strains to colour tip labels
+resistant.strains <- mytree.SNPscale.data.meta[mytree.SNPscale.data.meta$A2059G=="yes","label"]
+current.subtree <- groupOTU(current.subtree, resistant.strains)
+
+# Plot tree and add edge labels (SNPs)
+current.subtree.snps.ggtree <- ggtree(current.subtree) %<+% 
+  subtree.edge + 
+  geom_text(aes(x=branch, label=SNPs, vjust=-.5),size=3,color="grey50")
+
+current.subtree.snps.ggtree
+
+```
+
+# Run rPinecone clustering and prepare clusters and variable labels for tree
+```{r}
+####
+# Run rPinecone on JG8 subtree
+#JG8.pinecone.output <- rPinecone::pinecone(current.subtree,5,1)
+JG8.pinecone.output <- rPinecone::pinecone(current.subtree,4,1)
+JG8.pinecone.output.tab <- data.frame(JG8.pinecone.output$table,stringsAsFactors = F)
+
+# Convert 'Singleton's into sublineages for cleanness
+sublineage.relabelling <- data.frame(Sub.lineage=sort(unique(JG8.pinecone.output.tab$Sub.lineage)),stringsAsFactors = F)
+sublineage.relabelling$newSublineages <- paste0("JG8.c",c(1:nrow(sublineage.relabelling)))
+
+
+JG8.pinecone.output.tab <- plyr::join(JG8.pinecone.output.tab, sublineage.relabelling, by="Sub.lineage")
+
+mytree.SNPscale.data.meta.JG8 <- mytree.SNPscale.data.meta
+colnames(mytree.SNPscale.data.meta.JG8)[1] <- "Taxa"
+JG8.pinecone.output.tab <- plyr::join(JG8.pinecone.output.tab,mytree.SNPscale.data.meta.JG8, by="Taxa")
+
+
+```
+
+
+# Define colours and plot JG8 subtree
+
+
+```{r}
+# Setup label names
+JG8.pinecone.output.tab2 <- JG8.pinecone.output.tab
+#JG8.pinecone.output.tab2[is.na(JG8.pinecone.output.tab2),]
+JG8.pinecone.output.tab2[JG8.pinecone.output.tab2$Village=="-","Village"] <- NA
+JG8.pinecone.output.tab2[JG8.pinecone.output.tab2$MDA_Round=="-","MDA_Round"] <- NA
+
+JG8.pinecone.output.tab2$newSublineages <- gsub("^","1_",JG8.pinecone.output.tab2$newSublineages)
+JG8.pinecone.output.tab2$Village <- gsub("^","2_",JG8.pinecone.output.tab2$Village)
+JG8.pinecone.output.tab2$MDA_Round <- gsub("^","3_",JG8.pinecone.output.tab2$MDA_Round)
+JG8.pinecone.output.tab2$MDA_Round <- gsub("Round","R",JG8.pinecone.output.tab2$MDA_Round)
+JG8.pinecone.output.tab2$MDA_Round.numeric <- as.numeric(gsub("3_R","",JG8.pinecone.output.tab2$MDA_Round))
+
+palette.blue <- colorRampPalette(c('black','#762a83','#af8dc3','#e7d4e8','#d9f0d3','#7fbf7b','#1b7837'))
+
+JG8.pinecone.output.tab2[is.na(JG8.pinecone.output.tab2$MDA_Round.numeric),"MDA_Round.numeric"] <- 0
+JG8.pinecone.output.tab2$MDA_Round.col <- palette.blue(9)[as.numeric(cut(JG8.pinecone.output.tab2$MDA_Round.numeric,breaks=9))]
+JG8.pinecone.output.tab2[JG8.pinecone.output.tab2$MDA_Round.numeric==0,"MDA_Round.col"] <- NA
+
+# Colors for Sublineage
+sublin.cols <- data.frame(newSublineages=sort(unique(JG8.pinecone.output.tab2$newSublineages)),stringsAsFactors = F)
+sublin.cols$Sublineage.col <- c("#A1E35F", "#DCC980","#DB7B7C","#8BDFBB", "#B898D4")
+JG8.pinecone.output.tab2 <- plyr::join(JG8.pinecone.output.tab2,sublin.cols, by="newSublineages")
+
+# Colors for Village
+village.cols <- data.frame(Village=c("2_Kosmayun", "2_Mazuz", "2_Samo","2_Zuen","2_Hurtol", "2_Landolam", "2_Lissel", "2_Putput","2_Missing"),stringsAsFactors = F)
+village.cols$village.col <- c('#b2182b','#d6604d','#f4a582','#fddbc7','#d1e5f0','#92c5de','#4393c3','#2166ac',"white")
+JG8.pinecone.output.tab2 <- plyr::join(JG8.pinecone.output.tab2,village.cols, by="Village")
+
+
+# Colors for Travel History
+travel.cols <- data.frame(Travel_History=sort(unique(JG8.pinecone.output.tab2$Travel_History)),stringsAsFactors = F)
+travel.cols[travel.cols$Travel_History=="-",] <- NA
+travel.cols$Travel.col <- c("white","lightgoldenrodyellow","orange3") 
+travel.cols <- travel.cols[!is.na(travel.cols$Travel_History),]
+travel.cols$Travel_History <- gsub("^","4\\_",travel.cols$Travel_History, perl=T)
+
+JG8.pinecone.output.tab2$Travel_History <- gsub("^","4\\_",JG8.pinecone.output.tab2$Travel_History, perl=T)
+JG8.pinecone.output.tab2[JG8.pinecone.output.tab2$Travel_History=="4_-","Travel_History"] <- NA
+JG8.pinecone.output.tab2 <- plyr::join(JG8.pinecone.output.tab2,travel.cols, by="Travel_History")
+
+
+# Combine colours and taxa into single dataframe
+combine.cols.df <- data.frame(variable=c((JG8.pinecone.output.tab2$newSublineages),((JG8.pinecone.output.tab2$Village)),(JG8.pinecone.output.tab2$MDA_Round),(JG8.pinecone.output.tab2$Travel_History)),stringsAsFactors = F)
+
+combine.cols.df5 <- data.frame(tag=(unique(as.character(unlist(JG8.pinecone.output.tab2[,c("newSublineages","Village","MDA_Round","Travel_History")])))),stringsAsFactors=F)
+combine.cols.df5$col <- unique(as.character(unlist(JG8.pinecone.output.tab2[,c("Sublineage.col","village.col","MDA_Round.col","Travel.col")])))
+
+combine.cols.df5 <- combine.cols.df5[combine.cols.df5$tag!="2_Missing",]
+combine.cols.df5.sort <- combine.cols.df5[order(combine.cols.df5$tag),]
+
+# Subset data for plotting
+pinecone.plotting3 <- data.frame(row.names=JG8.pinecone.output.tab2$Taxa,Sub.lineage=JG8.pinecone.output.tab2$newSublineages,Village=JG8.pinecone.output.tab2$Village,MDA.round=JG8.pinecone.output.tab2$MDA_Round, Travel_History=JG8.pinecone.output.tab2$Travel_History, stringsAsFactors = F)
+
+
+pinecone.plotting3[(pinecone.plotting3$Village=="2_Missing" & !is.na(pinecone.plotting3$Village=="2_Missing")) ,"Village"] <- NA
+
+```
+
+
+# Plot Tree
+
+
+```{r,fig.width = 8, fig.height = 6}
+# Plot Tree
+current.subtree.snps.ggtree.hm <- current.subtree.snps.ggtree %>% 
+  gheatmap(pinecone.plotting3, colnames_position="top",font.size=3,offset=5,width=0.25) +
+  geom_tiplab(aes(color=group),size=2.5,align=T,offset=1) +
+  scale_fill_manual(breaks=factor(combine.cols.df5.sort$tag,levels=sort(combine.cols.df5.sort$tag)), values=combine.cols.df5.sort$col,labels=gsub("^.+\\_","",combine.cols.df5.sort$tag,perl=T)) +
+  scale_color_manual(values = c("black","red")) +
+  geom_treescale(y=22,x=3,fontsize=3, width=1) +
+  NULL
+
+# Additional cleaning of Legend and labels performed in inkscape
+
+current.subtree.snps.ggtree.hm
+
+
+```
+
+
+
+
+
+# Plot basic transmission network for A2059G cluster
+```{r}
+# Attempt to build figure for A2059G resistance network
+
+# Read in data
+A2059G.net <- read.table(A2059G.net.file,header = T, sep="\t",stringsAsFactors = F)
+
+# Fix dates
+A2059G.net$Date <- as.Date(A2059G.net$Date,"%d/%m/%Y")
+A2059G.net$Episode.start <- A2059G.net$Date - lubridate::weeks(A2059G.net$Weeks.Duration)
+
+#Do some relabelling
+A2059G.net$A2059G <- ifelse(A2059G.net$A2059G=="yes","Resistant","Sensitive")
+A2059G.net$Patient.revised <- factor(gsub("\\_","\\ ",A2059G.net$Patient.revised),levels=c("Patient 5", "Patient 7", "Patient 6", "Patient 4", "Patient 3", "Patient 2", "Patient 1"))
+
+# Make plot
+plot.A2059G.net <- ggplot(A2059G.net,aes(Date, Patient.revised)) + 
+  # Set up initial plot (need to specify points here to get scales right)
+  geom_point(aes(shape=Genome2,color=A2059G.mix),size=9) +
+  scale_color_manual(values=c("lightcoral","red","black")) +
+  # Specify village colours for background
+  #geom_rect( aes(xmin=as.Date("01/09/2015","%d/%m/%Y"), xmax=as.Date("30/12/2016","%d/%m/%Y"), ymin=1.525, ymax=7.58), fill="#b2182b", alpha=0.04,inherit.aes=F) +
+  geom_rect( aes(xmin=as.Date("01/09/2015","%d/%m/%Y"), xmax=as.Date("30/12/2016","%d/%m/%Y"), ymin=1.525, ymax=8.58), fill="#b2182b", alpha=0.04,inherit.aes=F) +
+    geom_rect( aes(xmin=as.Date("01/09/2015","%d/%m/%Y"), xmax=as.Date("30/12/2016","%d/%m/%Y"), ymin=0.42, ymax=1.475), fill="#fddbc7", alpha=0.04,inherit.aes=F) +
+  # Plot episode duration line
+  geom_rect(aes(xmin=Date, xmax=Episode.start, ymin=Patient.revised, ymax=Patient.revised,color=A2059G.mix),inherit.aes = F,size=3) +
+  # Plot outer point colour
+  geom_point(aes(shape=Genome2,color=A2059G.mix),size=9) +
+  # Plot inner point colour
+  geom_point(aes(shape=Genome2),size=6.5,color="white") +
+  # Plot episode duration inner line
+  geom_rect(aes(xmin=Date, xmax=Episode.start, ymin=Patient.revised, ymax=Patient.revised),inherit.aes = F,size=1,color="white") +
+  theme_bw() +
+  # Set scales and axes limits
+  scale_x_date(date_labels = "%m/%Y",date_minor_breaks = "1 month",expand = expand_scale(mult = c(0.0, 0.0))) + 
+  coord_cartesian(xlim=c(as.Date("01/10/2015","%d/%m/%Y"),as.Date("15/12/2016","%d/%m/%Y"))) +
+  # Add Sample names below each sampling point
+  geom_text(data=A2059G.net,aes(Date, Patient.revised,label=gsub("PNGL\\_","",Sample)),size=2, 
+            nudge_y=-0.33) +
+  # Clean up axis labels
+  labs(x="Sample Date", y="Patient")
+
+# Final cleaning of legend, plus addition of epidemiological links drawn in inkscape.
+
+plot.A2059G.net
+
+```
+
+
+# Import SNPs vs JG8 tree
+```{r}
+# SNP positional plot
+TPP.vcf <- read.table(TPP.vcf.file,stringsAsFactors = F, header=T, sep="\t",comment.char = "")
+
+# Define seqnames (R import messes them up)
+seqnames <- c("TPP_WP0022.7.liq", "TPP_CP0495", "TPP_CP0492", "TPP_WP0022.7.scab", "TPP_CP0461", "TPP_WP0022.5", "TPP_CP0465", "PNGL_R2-SR001B", "PNGL_R8-LMC-004", "PNGL_C5-SAM001", "PNGL_R6-SAM1-001", "PNGL_R2-106190", "PNGL_R8-MAZ-003", "PNGL_R8-KOS-004", "PNGL_R3-Zu003", "PNGL_R2-64919", "PNGL_R8-KOS-007", "PNGL_R7-Put1-002", "PNGL_C5-ZUE007", "PNGL_R7-Lan-005", "PNGL_R6-HUR-007", "PNGL_R4-ZU-021", "PNGL_R6-LES004")
+
+
+vcf.header <- c("CHROM","POS","ID","REF","ALT","QUAL","FILTER","INFO","FORMAT")
+vcf.seqnames <- c(vcf.header,seqnames)
+colnames(TPP.vcf) <- vcf.seqnames
+
+# Cleanup sites to only include confirmed SNPs (not missing/n/*)
+TPP.vcf$ALT1 <- sapply(1:nrow(TPP.vcf), function (x) strsplit(TPP.vcf$ALT[x],split=",")[[1]][1])
+TPP.vcf$ALT2 <- sapply(1:nrow(TPP.vcf), function (x) strsplit(TPP.vcf$ALT[x],split=",")[[1]][2])
+
+TPP.vcf$ALT1 <- gsub("\\*","n",TPP.vcf$ALT1)
+TPP.vcf$ALT2 <- gsub("\\*","n",TPP.vcf$ALT2)
+# get rid of NA by making 'n' - note these are NOT true 'n', so need to comment out if want 'n' for all sites in analysis
+TPP.vcf$ALT2[is.na(TPP.vcf$ALT2)] <- "n"
+
+
+TPP.vcf.cleanup <- TPP.vcf[,c("POS","ALT1","ALT2",seqnames)]
+TPP.vcf.cleanup <- data.frame(POS=TPP.vcf$POS,ALT1=TPP.vcf$ALT1,ALT2=TPP.vcf$ALT2, 
+                              t(sapply(1:nrow(TPP.vcf.cleanup), function(x) sapply(seqnames,function(y) ifelse(TPP.vcf.cleanup[x,y]==1 & TPP.vcf.cleanup[x,"ALT1"]=="n",0,TPP.vcf.cleanup[x,y])))),stringsAsFactors = F)
+colnames(TPP.vcf.cleanup) <- c("POS","ALT1","ALT2",seqnames)
+
+TPP.vcf.cleanup <- data.frame(POS=TPP.vcf$POS,ALT1=TPP.vcf$ALT1,ALT2=TPP.vcf$ALT2, 
+                              t(sapply(1:nrow(TPP.vcf.cleanup), function(x) sapply(seqnames,function(y) ifelse(TPP.vcf.cleanup[x,y]==2 & TPP.vcf.cleanup[x,"ALT2"]=="n",0,TPP.vcf.cleanup[x,y])))),stringsAsFactors = F)
+colnames(TPP.vcf.cleanup ) <- c("POS","ALT1","ALT2",seqnames)
+TPP.vcf.cleanup <- data.frame(POS=TPP.vcf$POS,ALT1=TPP.vcf$ALT1,ALT2=TPP.vcf$ALT2, 
+                              t(sapply(1:nrow(TPP.vcf.cleanup), function(x) sapply(seqnames,function(y) ifelse(TPP.vcf.cleanup[x,y]==2 & TPP.vcf.cleanup[x,"ALT2"]!="n",1,TPP.vcf.cleanup[x,y])))),stringsAsFactors = F)
+colnames(TPP.vcf.cleanup ) <- c("POS","ALT1","ALT2",seqnames)
+
+# Convert sequence alignment file into a dataframe (gene.aln)
+gene.aln <- TPP.vcf.cleanup[,c("POS",seqnames)]
+rownames(gene.aln) <- gene.aln$POS
+colnames(gene.aln) <- c("POS",seqnames)
+
+# Only keep samples of interest for JG8 study
+gene.aln.full <- gene.aln
+gene.aln.study <- gene.aln[,colnames(gene.aln) %in% fix.tipnames[fix.tipnames$new.name %in% current.subtree$tip.label,"old.name"]]
+gene.aln <- gene.aln.study
+gene.aln$position <- rownames(gene.aln)
+
+
+# List sites
+sort(as.numeric(gene.aln$position))
+
+
+vcf.seqnames
+```
+
+
+
+```{r}
+
+###
+# Aggregate SNPs into sliding windows for larger genomes
+windowsize <- 1000       # specify size of window
+genomelength <- 1139430
+nwindows <- genomelength/windowsize
+
+# Create a copy of binary matrix and define bins
+gene.aln2 <- gene.aln
+row.names(gene.aln2) <- gene.aln2$position
+gene.aln2$window <- ((trunc(as.numeric(rownames(gene.aln2)) / windowsize,0))*windowsize) # create binning variables and re-label to nearest bin 
+
+JG8.seqnames <- fix.tipnames[fix.tipnames$new.name %in% current.subtree$tip.label,"old.name"]
+
+gene.aln.windowed <- unique(gene.aln2$window)
+snps.windowed.counts <- unique(gene.aln2$window)
+
+gene.aln3 <- gene.aln2
+
+# Loop through all sequences, and if there is a SNP (1) within the window, make it a 1
+for (seq in JG8.seqnames){
+  snps.window <- aggregate(as.numeric(gene.aln2[,seq]), list(gene.aln2$window), max) # aggregate depth based on bin and calculate mean
+  snps.window[,2] <- as.character(snps.window[,2])
+  gene.aln.windowed <- cbind(gene.aln.windowed,snps.window[,2])
+  
+  snps.window.count <- aggregate(as.numeric(gene.aln3[,seq]), list(gene.aln3$window), sum) # aggregate depth based on bin and calculate mean
+  snps.window.count[,2] <- as.character(snps.window.count[,2])
+  snps.windowed.counts <- cbind(snps.windowed.counts,snps.window.count[,2])
+}
+gene.aln.windowed <- data.frame(gene.aln.windowed,stringsAsFactors = F)
+colnames(gene.aln.windowed) <- c("window",JG8.seqnames)
+
+snps.windowed.counts <- data.frame(snps.windowed.counts,stringsAsFactors = F)
+colnames(snps.windowed.counts) <- c("window",JG8.seqnames)
+
+# Generate the plot of SNP presence/absence
+gene.aln.windowed.melt <- reshape2::melt(gene.aln.windowed, id.vars="window")
+colnames(gene.aln.windowed.melt) <- c("Position","Sequence","Variant")
+gene.aln.windowed.melt$Position <- as.numeric(gene.aln.windowed.melt$Position)
+
+```
+
+
+# Plot JG8 subtree with SNPs
+```{r,fig.width = 8, fig.height = 11}
+### ggtree
+# Just presence/absence in window
+gene.aln.windowed.melt2 <- gene.aln.windowed.melt
+# Or with count per window
+gene.aln.windowed.melt2  <- reshape2::melt(snps.windowed.counts, id.vars="window")
+colnames(gene.aln.windowed.melt2) <- c("Position","Sequence","Variant")
+#
+gene.aln.windowed.melt2$old.name <- gene.aln.windowed.melt2$Sequence
+gene.aln.windowed.melt2 <- plyr::join(gene.aln.windowed.melt2,fix.tipnames,by="old.name")
+gene.aln.windowed.melt2 <- gene.aln.windowed.melt2[,c("new.name","Position","Variant")]
+colnames(gene.aln.windowed.melt2) <- c("Sample","Position","Variant Count")
+gene.aln.windowed.melt2 <- gene.aln.windowed.melt2[gene.aln.windowed.melt2$Variant!=0,]
+
+# Generate Tree
+p.JG8.tree.SNPpos <- current.subtree.snps.ggtree + xlim_tree(15) +
+  geom_facet(panel = "SNP position", data = gene.aln.windowed.melt2, geom = geom_point, 
+               mapping=aes(x = as.numeric(Position), color=`Variant Count`), shape = '|',size=4) +
+  theme_tree2(legend.position=c(0.10, .85)) +
+  geom_tiplab(size=3) +
+  NULL
+
+p.JG8.tree.SNPpos 
+
+```
+
+This plot nicely shows the genomic position of SNPs, but because the sequencing was low coverage, we find some of these sites are missing due to insufficient coverage (they have been blanked to 'N'). To show the allelic variation, we import the MSA and plot this aswell.
+
+# Incorporate specific variants into plot
+```{r}
+# Add MSA plot to show whether each SNP is supported or 'N'
+JG8.fasta <- read.fasta(file=JG8.fasta.file , seqtype="DNA", as.string=T,set.attributes=F)
+
+# Capture and relabel the sequence names and make them pretty 
+JG8.fasta.seqnames <- data.frame(old.name=names(JG8.fasta),stringsAsFactors = F)
+JG8.fasta.seqnames <- plyr::join(JG8.fasta.seqnames,fix.tipnames, by="old.name")
+
+# Convert sequence alignment file into a dataframe (gene.aln)
+JG8.gene.aln <- data.frame((as.matrix.alignment(seqinr::as.alignment(nb=length(JG8.fasta.seqnames$new.name),nam=NULL,seq=JG8.fasta,com=NULL))), stringsAsFactors = F)
+JG8.gene.aln$Sample <- JG8.fasta.seqnames$new.name
+JG8.gene.aln <- JG8.gene.aln[,c(ncol(JG8.gene.aln),1:(ncol(JG8.gene.aln)-1))]
+JG8.gene.aln.melt <- reshape2::melt(JG8.gene.aln,id.vars="Sample")
+colnames(JG8.gene.aln.melt) <- c("Sample","SNP","Allele")
+JG8.gene.aln.melt$Allele[JG8.gene.aln.melt$Allele=='-'] <- 'n'
+JG8.gene.aln.melt$Allele <- factor(JG8.gene.aln.melt$Allele, levels=c("a","c","g","t","n"))
+
+# Make a new plot showing the alleles
+p.JG8.tree.SNPpos.vars <- p.JG8.tree.SNPpos + 
+  geom_facet(panel = "Variant Sites", data = JG8.gene.aln.melt, geom = geom_tile, 
+             mapping=aes(x = as.numeric(SNP), fill=Allele),color="white") + 
+  scale_fill_manual(values=c("indianred2","lemonchiffon","lightgreen","skyblue1","gray80")) +
+  NULL
+
+```
+
+```{r,fig.width = 12, fig.height = 11}
+p.JG8.tree.SNPpos.vars 
+
+
+```
+
+
+
+# Look at Phylobayes outputs to confirm tree topology
+```{r}
+#library(phangorn)
+
+phylobayes.contree <- read.tree(phylobayes.contree.file)
+phylobayes.run1 <- read.tree(phylobayes.run1.file)
+phylobayes.run2 <- read.tree(phylobayes.run2.file)
+phylobayes.sample <- read.tree(phylobayes.sample.file)
+
+
+# Combine trees, removing first 10% (burnin)
+treecount <- length(phylobayes.run1)
+treecount
+burnin <- (treecount/10) +1
+phylobayes.combined.runs <- c(phylobayes.run1[burnin:treecount],phylobayes.run2[burnin:treecount])
+length(phylobayes.combined.runs)
+length(phylobayes.sample)
+
+# Build consensus network from combined trees, including any edges present in at least 1% of trees
+phylobayes.combined.consensusnet <- phangorn::consensusNet(phylobayes.combined.runs,prob=0.01)
+# Identify edges present in the consensus network that are absent from the consensus tree
+phylobayes.confidences <- phangorn::addConfidences(phylobayes.combined.consensusnet,phylobayes.contree,scaler=0.01)
+split.col <- rep("black",length(phylobayes.confidences$splits))
+split.col[!phangorn::matchSplits(phangorn::as.splits(phylobayes.confidences), phangorn::as.splits(phylobayes.contree))] <- "red"
+
+# Fix tipnames (to be consistent with elsewhere in the analysis)
+phylobayes.tiplabs <- data.frame(old.name=phylobayes.combined.consensusnet$tip.label)
+phylobayes.tiplabs <- plyr::join(phylobayes.tiplabs,fix.tipnames,by="old.name")
+phylobayes.tiplabs$tip.col <- c( "aquamarine3", "aquamarine3", "hotpink1", "hotpink1", "hotpink1", "hotpink1", "darkorchid3","orange1", "orange1", "orange1", "orange1", "orange1", "orange1", "orange1", "orange1", "orange1", "orange1", "orange1","springgreen4", "springgreen4", "springgreen4", "springgreen4","black", "black", "black", "black", "black", "black", "black", "black", "black", "black", "black","black","black","black","black","black","black","aquamarine3")
+phylobayes.combined.consensusnet$tip.label <- phylobayes.tiplabs$new.name
+phylobayes.confidences$tip.label <- phylobayes.tiplabs$new.name
+
+
+
+```
+
+Plot network - this is not scaled by branch length, and simply shows topology. From this, the sub-lineage clustering described in our ML phylogenies is confirmed.
+
+```{r, fig.width = 6, fig.height = 6}
+# Plot phylobayes network. Any unsupported edges not in tree would be coloured red
+plot(phylobayes.confidences,"2D",show.edge.label=F, split.color=split.col,nomatch="red",tip.color=phylobayes.tiplabs$tip.col)
+```
+
+
+
+### Further look at phylobayes in a densiTree
+It isn't reasonable to plot 25,560 trees here, so we will use a subsampled dataset of 1410 trees
+
+```{r}
+# Compare against ML tree (reread in)
+mytree.phylo2 <- phytools::midpoint.root(read.tree(tree.file))
+
+# define some tip colours to match our sub-lineages
+densi.tiplabs.cols <- rev(c("black", "black", "black", "black", "black", "black", "black", "black", "black", "black", "black", "black", "black", "black", "black", "black", "black", "springgreen4", "springgreen4", "springgreen4", "springgreen4", "hotpink1", "hotpink1", "hotpink1", "darkorchid3", "hotpink1", "orange1", "orange1", "orange1", "orange1", "orange1", "orange1", "orange1", "orange1", "orange1", "orange1", "orange1", "aquamarine3", "aquamarine3", "aquamarine3"))
+
+
+```
+
+Although difficult to see due to scale, the sublineage clustering is maintained here.
+```{r,fig.width = 6, fig.height = 6}
+
+# Now plot the densiTree
+phangorn::densiTree(phylobayes.sample,"cladogram",alpha=(1/length(phylobayes.sample))*10, 
+                    scaleX=T,consensus=mytree.phylo2,scale.bar=F,tip.color = densi.tiplabs.cols)
+
+```
+
+# Put these two base graphics objects into a single plot
+```{r,fig.width = 12, fig.height = 8}
+
+# put these plots into objects we can plot as panels
+
+p1.pryr %<a-% {plot(phylobayes.confidences,"2D",show.edge.label=F, split.color=split.col,nomatch="red",tip.color=phylobayes.tiplabs$tip.col)}
+
+p2.pryr %<a-% {phangorn::densiTree(phylobayes.sample,"cladogram",alpha=(1/length(phylobayes.sample))*10, 
+                      scaleX=T,consensus=mytree.phylo2,scale.bar=F,tip.color = densi.tiplabs.cols)}
+
+split.screen(c(1, 2))
+screen(1)
+p1.pryr
+screen(2)
+p2.pryr
+close.screen(all=TRUE)
+
+
+
+
+```
+
+
+Beast tree analysis
+```{r}
+#Beast.tree.file <- "TPE_SamoaD_v1_bwa.74pc-genome-cov+.20190920.gubbins-WGS-aln.all.renamed.+dates.no-invariant+N.StrictConstant_combined.consensus.tree"
+
+Beast.tree.file <- "TPE_SamoaD_v1_bwa.74pc-genome-cov+.20190920.gubbins-WGS-aln.all.renamed.+dates.no-invariant+N.StrictConstant_combined.consensus.renamed.tree"
+```
+
+
+```{r}
+# Bring in beast tree and extract tree data into dataframe
+yaws.beast.tree <- read.beast(Beast.tree.file)
+yaws.beast.tree.data <- fortify(yaws.beast.tree)
+
+yaws.beast.tree@phylo$tip.label
+```
+
+```{r}
+# Fix ML tree tipnames
+beast.tipnames <- data.frame(old.name=yaws.beast.tree@phylo$tip.label,stringsAsFactors = F)
+beast.tipnames <- plyr::join(beast.tipnames,fix.tipnames, by="old.name")
+yaws.beast.tree@phylo$tip.label <- beast.tipnames$new.name
+yaws.beast.tree@phylo$tip.label
+```
+
+
+
+
+```{r}
+# Plot minimally annotated BEAST Tree (no tip labels or colours)
+yaws.beast.tree.plot <- ggtree(yaws.beast.tree,mrsd="2016-08-13",ladderize = T) + 
+  theme_tree2() +
+# Add date lines for easy interpretation  
+  scale_x_continuous(breaks=c(1500,1600,1700,1800, 1900, 1990, 2000,2010, 2015), minor_breaks=seq(2000, 2016, 2)) +
+  theme(panel.grid.major   = element_line(color="grey50", size=.2),
+        panel.grid.minor   = element_line(color="grey85", size=.2),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank()) #+ xlim_tree(2090)
+# Add posterior support as node points
+yaws.beast.tree.plot <- yaws.beast.tree.plot + geom_point2(aes(subset=(!isTip & as.numeric(posterior)>0.8)),color="gray60",size=3,alpha=0.5) + 
+  geom_point2(aes(subset=(!isTip & as.numeric(posterior)>0.91)),color="gray40",size=3,alpha=0.5) + 
+  geom_point2(aes(subset=(!isTip & as.numeric(posterior)>=0.96)),color="black",size=3,alpha=0.5)
+
+```
+
+
+```{r}
+
+yaws.beast.tree.plot
+```
+
+
+```{r}
+yaws.beast.tree.subtree <- tree_subset(yaws.beast.tree, node=52,levels_back=0)
+
+# apply group to allow colouring of taxa by resistance
+yaws.beast.tree.subtree <- groupOTU(yaws.beast.tree.subtree, resistant.strains)
+
+# flip the hpd intervals
+yaws.beast.tree.subtree@data$height_0.95_HPD <- lapply(1:length(yaws.beast.tree.subtree@data$height_0.95_HPD), function (x) rev(yaws.beast.tree.subtree@data$height_0.95_HPD[[x]]))
+
+
+yaws.beast.tree.subtree.plot <- ggtree(yaws.beast.tree.subtree,mrsd="2016-08-13",ladderize = T) +
+  theme_tree2() +
+# Add date lines for easy interpretation  
+  scale_x_continuous(breaks=c(1990,1995,2000,2005,2010,2015), minor_breaks=seq(2005, 2017, 1)) +
+  theme(panel.grid.major   = element_line(color="grey50", size=.2),
+        panel.grid.minor   = element_line(color="grey85", size=.2),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank()) #+ xlim_tree(2090)
+# Add posterior support as node points
+yaws.beast.tree.subtree.plot <- yaws.beast.tree.subtree.plot + geom_point2(aes(subset=(!isTip & as.numeric(posterior)>0.8)),color="gray60",size=3,alpha=0.5) + 
+  geom_point2(aes(subset=(!isTip & as.numeric(posterior)>0.91)),color="gray40",size=3,alpha=0.5) + 
+  geom_point2(aes(subset=(!isTip & as.numeric(posterior)>=0.96)),color="black",size=3,alpha=0.5) +
+  #geom_range(range='height_0.95_HPD',color='red', alpha=.25, size=2,branch.length="height_median") +
+  NULL
+
+```
+
+```{r}
+
+yaws.beast.tree.subtree.plot #%<+% #edge + geom_text(aes(x=branch, label=SNPs, vjust=-.5),size=3,color="grey50") 
+```
+
+
+```{r}
+yaws.beast.tree.subtree.plot.meta <- yaws.beast.tree.subtree.plot %>% gheatmap(pinecone.plotting3, colnames_position="top",font.size=3,offset=5,width=0.25) +
+  geom_tiplab(aes(color=group),size=2.5,align=T,offset=1) +
+  scale_fill_manual(breaks=factor(combine.cols.df5.sort$tag,levels=sort(combine.cols.df5.sort$tag)),values=combine.cols.df5.sort$col,labels=gsub("^.+\\_","",combine.cols.df5.sort$tag,perl=T)) +
+  scale_color_manual(values = c("black","red")) + 
+  NULL
+
+```
+
+
+```{r}
+yaws.beast.tree.subtree.plot.meta 
+```
+
+
+Ok, so BEAST is splitting the JG8.c3 genomes into two clusters. This is odd, because there are no SNPs between them. Let's just confirm this in the alignment used for BEAST
+```{r}
+beast.msa.file <- "/Users/mb29/Treponema/PNG_Lihir_Yaws_2018/Analysis/Phylo/gubbins_global_2019-09-20_masked/beast/TPE_SamoaD_v1_bwa.74pc-genome-cov+.20190920.gubbins-WGS-aln.all.renamed.+dates.no-invariant+N.fasta"
+
+beast.msa <- seqinr::read.fasta(file=beast.msa.file , seqtype="DNA", as.string=T,set.attributes=F)
+
+# Capture and relabel the sequence names and make them pretty 
+beast.msa.seqnames <- data.frame(old.name=gsub("\\|.+$","",names(beast.msa),perl=T),stringsAsFactors = F)
+beast.msa.seqnames <- plyr::join(beast.msa.seqnames,fix.tipnames, by="old.name")
+
+# Convert sequence alignment file into a dataframe (gene.aln)
+beast.msa.aln <- data.frame((as.matrix.alignment(seqinr::as.alignment(nb=length(beast.msa.seqnames$new.name),nam=NULL,seq=beast.msa,com=NULL))), stringsAsFactors = F)
+
+beast.msa.aln$Sample <- beast.msa.seqnames$new.name
+beast.msa.aln <- beast.msa.aln[,c(ncol(beast.msa.aln),1:(ncol(beast.msa.aln)-1))]
+colnames(beast.msa.aln) <- gsub("X","",colnames(beast.msa.aln))
+
+
+# Pull out the JG8.c3 samples
+
+beast.msa.aln.JG8.c3 <- beast.msa.aln[beast.msa.aln$Sample %in% c("R8-LMC-004","R8-KOS-004","R8-KOS-007","R7-PUT1-002"),]
+beast.msa.aln.JG8.c3.melt <- reshape2::melt(beast.msa.aln.JG8.c3, id.vars="Sample")
+
+#ggplot(beast.msa.aln.JG8.c3.melt, aes(variable, Sample, fill=value)) + geom_tile()
+
+beast.msa.aln.JG8.c3.trans <- data.frame(t(beast.msa.aln.JG8.c3),stringsAsFactors = F)
+colnames(beast.msa.aln.JG8.c3.trans) <- beast.msa.aln.JG8.c3.trans[1,]
+beast.msa.aln.JG8.c3.trans <- beast.msa.aln.JG8.c3.trans[c(2:nrow(beast.msa.aln.JG8.c3.trans)),]
+
+beast.msa.aln.JG8.c3.trans$changes <- sapply(1:nrow(beast.msa.aln.JG8.c3.trans), function(x) ifelse(length(unique(as.character(beast.msa.aln.JG8.c3.trans[x,])))==1,"fixed","variant"))
+
+beast.msa.aln.JG8.c3.trans$position <- rownames(beast.msa.aln.JG8.c3.trans)
+
+beast.msa.aln.JG8.c3.variants <- beast.msa.aln.JG8.c3.trans[beast.msa.aln.JG8.c3.trans$changes=="variant",]
+beast.msa.aln.JG8.c3.variants.melt <- reshape2::melt(beast.msa.aln.JG8.c3.trans[beast.msa.aln.JG8.c3.trans$changes=="variant",c("position","R8-LMC-004","R8-KOS-004","R8-KOS-007","R7-PUT1-002")], id.vars="position")
+
+ggplot(beast.msa.aln.JG8.c3.variants.melt, aes(variable, position,  fill=value)) + 
+  geom_tile()  
+
+
+```
+```{r}
+
+# seems like most are 'n' - which of those changes are SNPs?
+beast.msa.aln.JG8.c3.variants$SNP.changes <- sapply(1:nrow(beast.msa.aln.JG8.c3.variants), function(x) ifelse(sum(nchar(unique(gsub("n","",as.character(beast.msa.aln.JG8.c3.trans[x,c("R8-LMC-004","R8-KOS-004","R8-KOS-007","R7-PUT1-002")])))))<=1,"n","SNP"))
+
+beast.msa.aln.JG8.c3.variants[beast.msa.aln.JG8.c3.variants$SNP.changes=="SNP",]
+
+```
+
+Ok, so these are indeed identical apart from the 'n' sites
+
+
+
+# Plot deep sequencing allele data
+
+```{r,fig.width = 8, fig.height = 6}
+#
+deep.seq.alleles <- read_excel(deep.seq.alleles.file)
+deep.seq.alleles.filt <- deep.seq.alleles[(deep.seq.alleles$GoodCoverage=="Yes" & deep.seq.alleles$ControlSample=="No" & deep.seq.alleles$E.Coli_equivalent_position==2059),]
+
+deep.seq.alleles.filt$A2059A <- deep.seq.alleles.filt$Coverage - deep.seq.alleles.filt$G_Total
+deep.seq.alleles.filt$A2059G <- deep.seq.alleles.filt$G_Total
+
+
+deep.seq.alleles.filt.melt <- reshape2::melt(deep.seq.alleles.filt[,c("SampleID2","A2059A","A2059G","Operon","Replicate")], 
+                                             id.vars=c("SampleID2", "Operon", "Replicate"))
+
+deep.seq.alleles.filt.melt$SampleID3 <- paste0(deep.seq.alleles.filt.melt$SampleID2,"_",deep.seq.alleles.filt.melt$Replicate)
+deep.seq.alleles.filt.melt$Operon <- gsub("^","Operon\\ ",deep.seq.alleles.filt.melt$Operon, perl=T)
+deep.seq.alleles.filt.melt$SampleID3 <- factor(deep.seq.alleles.filt.melt$SampleID3, levels=rev(sort(unique(deep.seq.alleles.filt.melt$SampleID3))))
+
+plot.deepseq.alleles <- ggplot(deep.seq.alleles.filt.melt, aes(SampleID3, value, fill=variable)) +
+  geom_bar(stat="identity", position="stack") + 
+  theme_light() + theme(strip.background =element_rect(fill="white"),strip.text = element_text(colour = 'black')) +
+  scale_fill_manual(values=c("black","red2")) +
+  labs(x="Sample", y="Reads (n)", fill="Allele") +
+  facet_grid(.~c(Operon)) +
+  coord_flip() + 
+  NULL
+
+plot.deepseq.alleles
+```
+
+
+Get some additional stats on alleles
+
+```{r}
+deep.seq.passing <- data.frame(deep.seq.alleles[(deep.seq.alleles$E.Coli_equivalent_position==2059 & deep.seq.alleles$ControlSample=="No"),],stringsAsFactors = F)
+
+deep.seq.passing$SampleID3 <- paste0(deep.seq.passing$SampleID2,"_",deep.seq.passing$Replicate)
+
+
+# unique samples (excluding controls)
+length(unique(deep.seq.passing$SampleID2))
+# unique samples (including replicates)
+length(unique(deep.seq.passing$SampleID3))
+
+# Samples with passing Operon 1
+length(deep.seq.passing[(deep.seq.passing$Operon==1 & deep.seq.passing$GoodCoverage=="Yes"),"SampleID3"])
+
+# Samples with passing Operon 2
+length(deep.seq.passing[(deep.seq.passing$Operon==2 & deep.seq.passing$GoodCoverage=="Yes"),"SampleID3"])
+
+
+```
+
+```{r}
+#deep.seq.passing.summary <- deep.seq.passing[deep.seq.passing$GoodCoverage=="Yes",] %>% 
+deep.seq.passing.summary <- deep.seq.passing[,] %>% 
+  dplyr::group_by(SampleID2, Operon, GoodCoverage, NGSResistant) %>%
+  dplyr::summarise(sample.count=n()) %>%
+  tidyr::spread(Operon, GoodCoverage)
+deep.seq.passing.summary <- data.frame(deep.seq.passing.summary,stringsAsFactors = F) 
+colnames(deep.seq.passing.summary) <- c("Sample", "NGSResistant", "sample.count", "Operon_1_coverage_OK","Operon_2_coverage_OK")
+deep.seq.passing.summary <- deep.seq.passing.summary[,c(1,2,4,5,3)]
+
+deep.seq.passing.summary
+```
+
+```{r}
+# Unique samples with good coverage at operon 1 
+(deep.seq.passing.summary[(deep.seq.passing.summary$Operon_1_coverage_OK=="Yes" & !is.na(deep.seq.passing.summary$Operon_1_coverage_OK)),"Sample"])
+length(deep.seq.passing.summary[(deep.seq.passing.summary$Operon_1_coverage_OK=="Yes" & !is.na(deep.seq.passing.summary$Operon_1_coverage_OK)),"Sample"])
+
+# Unique samples with good coverage at operon 2 
+(deep.seq.passing.summary[(deep.seq.passing.summary$Operon_2_coverage_OK=="Yes" & !is.na(deep.seq.passing.summary$Operon_2_coverage_OK)),"Sample"])
+length(deep.seq.passing.summary[(deep.seq.passing.summary$Operon_2_coverage_OK=="Yes" & !is.na(deep.seq.passing.summary$Operon_2_coverage_OK)),"Sample"])
+
+# Unique samples with good coverage at both operons 1 and 2 
+(deep.seq.passing.summary[(deep.seq.passing.summary$Operon_2_coverage_OK=="Yes" & !is.na(deep.seq.passing.summary$Operon_2_coverage_OK) & deep.seq.passing.summary$Operon_1_coverage_OK=="Yes" & !is.na(deep.seq.passing.summary$Operon_1_coverage_OK)),"Sample"])
+length(deep.seq.passing.summary[(deep.seq.passing.summary$Operon_2_coverage_OK=="Yes" & !is.na(deep.seq.passing.summary$Operon_2_coverage_OK) & deep.seq.passing.summary$Operon_1_coverage_OK=="Yes" & !is.na(deep.seq.passing.summary$Operon_1_coverage_OK)),"Sample"])
+
+# Unique samples with good coverage in at least one of  operons 1 and 2 
+(deep.seq.passing.summary[(deep.seq.passing.summary$Operon_1_coverage_OK=="Yes" | deep.seq.passing.summary$Operon_2_coverage_OK=="Yes"),"Sample"])
+
+unique.samples.suceeding <- unique(deep.seq.passing.summary[(deep.seq.passing.summary$Operon_1_coverage_OK=="Yes" | deep.seq.passing.summary$Operon_2_coverage_OK=="Yes"),"Sample"])
+length(unique.samples.suceeding[!is.na(unique.samples.suceeding)])
+
+
+```
+
+Look at potential heterozygotes
+
+```{r}
+
+deep.seq.passing.putheteros <- deep.seq.passing[deep.seq.passing$SampleID2 %in% c("R8-KOS-007","R7-KOS-003"),]
+deep.seq.passing.putheteros$A_Total <- deep.seq.passing.putheteros$Coverage - deep.seq.passing.putheteros$G_Total
+
+```
+
+
+# Import and process read-haplotype calling data (operon1)
+```{r}
+# Comparison of all deep seq samples
+bam2hap.all <- read.table(bam2hap.all.file, header=T, stringsAsFactors = F, sep="\t")
+
+# Script excludes reads/haplotypes below a threshold - here <80 reads. To get true sample proportions of haplotypes, need to include an 'other' category
+bam2hap.counts <- data.frame(bam2hap.all %>%
+                               dplyr::group_by(Sample) %>% dplyr::summarise(IncludedDepth=sum(count)),stringsAsFactors = F)
+
+bam2hap.counts <- plyr::join(unique(bam2hap.all[,c("Sample","FilteredSampleDepth")]),bam2hap.counts, by="Sample")
+bam2hap.counts$non.haplocount <- bam2hap.counts$FilteredSampleDepth-bam2hap.counts$IncludedDepth
+bam2hap.counts$GHap <- "Other"
+bam2hap.counts <- bam2hap.counts[,c("Sample","non.haplocount","GHap")]
+colnames(bam2hap.counts) <- c("Sample","count","GHap")
+
+# Merge 'other' counts with main data
+bam2hap.all.cleaned <- bam2hap.all[,c("Sample","count","GHap")]
+bam2hap.all.cleaned <- rbind(bam2hap.all.cleaned,bam2hap.counts)
+
+# Do some reordering
+bam2hap.all.cleaned <- bam2hap.all.cleaned[order(as.numeric(gsub("GHap-","",bam2hap.all.cleaned$GHap)),(bam2hap.all.cleaned$Sample)),]
+bam2hap.all.cleaned$GHap <- factor(bam2hap.all.cleaned$GHap, levels=rev(unique(bam2hap.all.cleaned$GHap)))
+
+bam2hap.all.cleaned$Sample <- gsub("\\.bam","",bam2hap.all.cleaned$Sample)
+bam2hap.all.cleaned$Sample <- factor(bam2hap.all.cleaned$Sample, levels=rev(sort(unique(bam2hap.all.cleaned$Sample))))
+
+
+```
+
+
+# Plot deep sequencing haplotype inference (operon1)
+```{r,fig.width = 7, fig.height = 6}
+
+plot.deepseq.haplotypes <- ggplot(bam2hap.all.cleaned, aes(Sample,count, fill=GHap)) + 
+  geom_bar(stat="identity", position="stack") +
+  labs(x="Sample",y="Reads (n)", fill="Haplotype") +
+  theme_light() +
+  scale_y_continuous(breaks=seq(0,8500,500), expand=c(0,0)) +
+  scale_fill_manual(breaks=c("GHap-0", "GHap-1", "GHap-2", "GHap-4", "GHap-12", "GHap-19", "GHap-30","Other"),values=c("#252525","red2","#525252","#737373","#969696","#bdbdbd","#d9d9d9","#f0f0f0")) +
+  coord_flip() +
+  NULL
+
+plot.deepseq.haplotypes
+```
+
+Look at putative heterozygotes
+```{r}
+
+
+bam2hap.all[bam2hap.all.cleaned$Sample %in% c("R8-KOS-007","R7-KOS-003"),]
+
+
+
+```
+
+
+
+
+# Look at phylogenetic context of index sample
+
+The pretreatment index sample (R6-KOS-002) performed badly in sequencing (approximately 54% of genomic sites recovered), so couldn't be included in the main phylogenies. Let's build a sequence alignment including only the variable sites available for contextual analysis. 
+
+First generate a MSA using the standard mapping pipeline (which automatically applies 'N' to sites failing filters). Then use snps-sites to create a VCF from the alignment (positions will be relative to sequence alignement, so will include INDELs, therefore sites will not be relevant to reference). 
+
+```{r}
+# read in VCF, plus site list
+index.failure.full.aln <- data.frame(pegas::read.vcf(index.failure.full.aln.file),stringsAsFactors = F)
+index.failure.full.sitelist <- read.table(index.failure.full.sitelist.file)
+
+colnames(index.failure.full.aln) <- index.failure.full.sitelist$V1[c(2:nrow(index.failure.full.sitelist))]
+
+```
+
+Next, subset to sites that are included in "PNGL_R6-KO5002" (index sample). 
+```{r}
+index.failure.exclude.missing <- index.failure.full.aln[,index.failure.full.aln["PNGL_R6-KO5002",]!="*"]
+
+# Replace "*" with "N"
+index.failure.exclude.missing2 <- data.frame(sapply(1:ncol(index.failure.exclude.missing), function(x) gsub("\\*","N",index.failure.exclude.missing[,x])), stringsAsFactors = F)
+colnames(index.failure.exclude.missing2) <- colnames(index.failure.exclude.missing)
+rownames(index.failure.exclude.missing2) <- rownames(index.failure.exclude.missing)
+
+# How many variable sites?
+ncol(index.failure.exclude.missing2)
+
+# what are the sites?
+#colnames(index.failure.exclude.missing2)
+```
+
+
+Now export these sites as an alignment. Note that we cannot run Gubbins on this SNP-only alignment, but it can be examined for phylogenetic signal
+```{r}
+# Concatenate to make sequences
+index.failure.msa.samples.seqs <- NULL
+for (current.sample in rownames(index.failure.exclude.missing2)){
+  index.failure.msa.samples.seqs <- c(index.failure.msa.samples.seqs,paste0(index.failure.exclude.missing2[current.sample,],collapse=""))
+}
+
+# make seqinr sequence alignment in R
+index.failure.msa.samples.seqs.alignment <- seqinr::as.alignment(nb=length(rownames(index.failure.exclude.missing2)), nam=rownames(index.failure.exclude.missing2), seq=index.failure.msa.samples.seqs)
+
+# Write out to fasta file using loop
+#index.fasta.out.filename <- "/Users/mb29/Treponema/PNG_Lihir_Yaws_2018/Analysis/Mapping/map-1.6-to-Samoa-masked_Lihir-CATreads_+_Global_2019-09-20/TPE_74pc-genome-cov+_index-sample54pc.index-seq-variable-sites.fas"
+
+index.fasta.out.filename <- "TPE_74pc-genome-cov+_index-sample54pc.index-seq-variable-sites.fas"
+
+for (current.sample in c(1:length(rownames(index.failure.exclude.missing2)))){
+  seqinr::write.fasta(names = index.failure.msa.samples.seqs.alignment$nam[current.sample], sequences = index.failure.msa.samples.seqs.alignment$seq[current.sample], file.out = index.fasta.out.filename,open="a", as.string = T)
+}
+
+
+```
+
+
+Use IQ-Tree to build SNP-only tree from alignment, then import and plot
+
+```{r}
+# import tree generated in IQ-Tree
+index.failure.tree.phylo <- phytools::midpoint.root(read.tree(index.failure.tree.file))
+
+# Fix tipnames
+index.failure.tipnames <- data.frame(old.name=index.failure.tree.phylo$tip.label,stringsAsFactors = F)
+index.failure.tipnames <- plyr::join(index.failure.tipnames,fix.tipnames, by="old.name")
+index.failure.tipnames[1,"new.name"] <- "SamoaD_reference"
+index.failure.tipnames[16,"new.name"] <- "TaïNP-2"
+
+index.failure.tree.phylo$tip.label <- index.failure.tipnames$new.name
+
+
+# Highlight resistant and index strains
+resistant.strains.index <- c("R8-KOS-004" ,"R8-KOS-007" ,"R8-LMC-004")
+index.strain <- "R6-KOS-002"
+cls <- list(resistant=resistant.strains.index, index=index.strain)
+
+# Create groups on tree
+index.failure.tree.phylo <- groupOTU(index.failure.tree.phylo, cls)
+
+
+# Do some processing on ML tree (e.g. nodes for bootstrapping)
+index.failure.tree.phylo.data <- data.frame(ggtree(index.failure.tree.phylo)$data,stringsAsFactors=F)
+index.failure.tree.phylo.data.nodes <- index.failure.tree.phylo.data[!index.failure.tree.phylo.data$isTip,]
+index.failure.tree.phylo.data.nodes$label <- as.numeric(index.failure.tree.phylo.data.nodes$label)
+index.failure.tree.phylo.data.nodes <- index.failure.tree.phylo.data.nodes[index.failure.tree.phylo.data.nodes$label >= 95,]
+
+# now build tree
+index.failure.tree.phylo.data.ggtree <- ggtree(index.failure.tree.phylo, ladderize = T) + 
+  geom_text(data=index.failure.tree.phylo.data.nodes, aes(label=label), size=2, hjust=1.25, vjust=-0.4)
+
+# plot tree
+index.failure.tree.phylo.data.ggtree + 
+  geom_tiplab(aes(color=group),size=2.5,align=T, offset=0.001, linesize=0.25) +
+  xlim_tree(0.05) + 
+  scale_color_manual(values=c("black","blue","red")) +
+  geom_treescale(fontsize=3,y=15,x=0.00085)
+
+```
+
+
+
+
+
