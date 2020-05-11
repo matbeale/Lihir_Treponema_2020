@@ -196,7 +196,10 @@ for currentwindow in windowsearchlist:
         unique_haplotypes_df['Sample'] = currentseq
         unique_haplotypes_df['WindowStart'] = currentwindow
         unique_haplotypes_df['WindowEnd'] = currentwindow + windowsize -1
-        
+
+        # Count number of filtered reads (before haplotype coverage filter, to allow relative % calculation)
+        unique_haplotypes_df['FilteredSampleDepth'] = unique_haplotypes_df['count'].sum()
+
         # Filter out haplotypes below minimum threshold
         unique_haplotypes_df= unique_haplotypes_df[unique_haplotypes_df['count'] >= int(hap_read_threshold)]       
         
